@@ -99,3 +99,57 @@ def upload_file(path):
         "name": created["name"],
         "url": f"https://drive.google.com/file/d/{file_id}/view"
     }
+
+
+def list_files():
+    service = get_service()
+
+    query = (
+        f"'{FOLDER_ID}' in parents "
+        "and trashed = false"
+    )
+
+    result = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id,name,mimeType,webViewLink,modifiedTime)",
+            orderBy="modifiedTime desc",
+            pageSize=100
+        )
+        .execute()
+    )
+
+    return result.get("files", [])
+
+
+def rename_file(file_id, new_name):
+    service = get_service()
+
+    updated = (
+        service.files()
+        .update(
+            fileId=file_id,
+            body={
+                "name": new_name
+            },
+            fields="id,name,webViewLink"
+        )
+        .execute()
+    )
+
+    return {
+        "id": updated["id"],
+        "name": updated["name"],
+        "url": f"https://drive.google.com/file/d/{updated['id']}/view"
+    }
+
+
+def delete_file(file_id):
+    service = get_service()
+
+    service.files().delete(
+        fileId=file_id
+    ).execute()
+
+    return True
