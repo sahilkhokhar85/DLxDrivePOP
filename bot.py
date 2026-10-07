@@ -45,6 +45,38 @@ def quality_keyboard(job_id):
     ])
 
 
+def make_progress_bar(percent, length=20):
+    filled = int(length * percent / 100)
+    empty = length - filled
+
+    return "█" * filled + "░" * empty
+
+
+async def update_download_progress(
+    status_message,
+    height,
+    percent,
+    speed,
+    eta,
+):
+    bar = make_progress_bar(percent)
+
+    speed_text = speed or "N/A"
+    eta_text = eta or "N/A"
+
+    text = (
+        f"⬇️ Downloading {height}p...\n\n"
+        f"{bar} {percent:.1f}%\n\n"
+        f"⚡ Speed: {speed_text}\n"
+        f"⏳ ETA: {eta_text}"
+    )
+
+    try:
+        await status_message.edit_text(text)
+    except Exception:
+        pass
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Send a direct master .m3u8 link."
@@ -77,7 +109,10 @@ async def receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def quality_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
     await query.answer()
 
@@ -125,20 +160,69 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def process_job(application, job_id, url, chat_id, qualities):
+async def process_job(
+    application,
+    job_id,
+    url,
+    chat_id,
+    qualities
+):
     try:
+        loop = asyncio.get_running_loop()
+
         for height in qualities:
 
             status = await application.bot.send_message(
                 chat_id=chat_id,
-                text=f"⬇️ Downloading {height}p..."
+                text=(
+                    f"⬇️ Downloading {height}p...\n\n"
+                    f"{make_progress_bar(0)} 0.0%\n\n"
+                    "⚡ Speed: Starting...\n"
+                    "⏳ ETA: Calculating..."
+                )
             )
+
+            last_percent = [-1.0]
+            last_update_time = [0.0]
+
+            def progress_callback(
+                percent,
+                speed,
+                eta
+            ):
+                import time
+
+                now = time.monotonic()
+
+                # Telegram ko bahut zyada edit requests na bhejein.
+                # Maximum roughly once per second.
+                if (
+                    percent < 100
+                    and percent - last_percent[0] < 1.0
+                    and now - last_update_time[0] < 1.0
+                ):
+                    return
+
+                last_percent[0] = percent
+                last_update_time[0] = now
+
+                asyncio.run_coroutine_threadsafe(
+                    update_download_progress(
+                        status,
+                        height,
+                        percent,
+                        speed,
+                        eta,
+                    ),
+                    loop,
+                )
 
             output = await asyncio.to_thread(
                 download_quality,
                 url,
                 height,
                 DOWNLOAD_DIR,
+                progress_callback,
             )
 
             await status.edit_text(
