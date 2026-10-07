@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import RetryAfter
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -46,35 +47,57 @@ def quality_keyboard(job_id):
 
 
 def make_progress_bar(percent, length=20):
+    percent = max(0.0, min(100.0, percent))
+
     filled = int(length * percent / 100)
     empty = length - filled
 
     return "█" * filled + "░" * empty
 
 
-async def update_download_progress(
-    status_message,
-    height,
-    percent,
-    speed,
-    eta,
-):
+def progress_text(height, percent, speed, eta):
     bar = make_progress_bar(percent)
 
-    speed_text = speed or "N/A"
-    eta_text = eta or "N/A"
+    speed = speed or "Calculating..."
+    eta = eta or "Calculating..."
 
-    text = (
+    return (
         f"⬇️ Downloading {height}p...\n\n"
         f"{bar} {percent:.1f}%\n\n"
-        f"⚡ Speed: {speed_text}\n"
-        f"⏳ ETA: {eta_text}"
+        f"⚡ Speed: {speed}\n"
+        f"⏳ ETA: {eta}"
     )
 
-    try:
-        await status_message.edit_text(text)
-    except Exception:
-        pass
+
+async def progress_updater(status, height, progress):
+    last_text = None
+
+    while not progress["finished"]:
+
+        percent = progress["percent"]
+        speed = progress["speed"]
+        eta = progress["eta"]
+
+        text = progress_text(
+            height,
+            percent,
+            speed,
+            eta,
+        )
+
+        if text != last_text:
+
+            try:
+                await status.edit_text(text)
+                last_text = text
+
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+
+            except Exception:
+                pass
+
+        await asyncio.sleep(2)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -83,7 +106,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_url(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     text = (update.message.text or "").strip()
     match = URL_RE.search(text)
 
@@ -118,8 +144,11 @@ async def quality_callback(
 
     try:
         action, value, job_id = query.data.split("|", 2)
+
     except ValueError:
-        await query.edit_message_text("❌ Invalid request.")
+        await query.edit_message_text(
+            "❌ Invalid request."
+        )
         return
 
     job = jobs.get(job_id)
@@ -141,8 +170,14 @@ async def quality_callback(
 
     if action == "q":
         qualities = [int(value)]
+
     else:
-        qualities = [1080, 720, 480, 360]
+        qualities = [
+            1080,
+            720,
+            480,
+            360
+        ]
 
     await query.edit_message_text(
         "⏳ Job started.\n"
@@ -168,62 +203,67 @@ async def process_job(
     qualities
 ):
     try:
-        loop = asyncio.get_running_loop()
 
         for height in qualities:
 
+            progress = {
+                "percent": 0.0,
+                "speed": "",
+                "eta": "",
+                "finished": False,
+            }
+
             status = await application.bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"⬇️ Downloading {height}p...\n\n"
-                    f"{make_progress_bar(0)} 0.0%\n\n"
-                    "⚡ Speed: Starting...\n"
-                    "⏳ ETA: Calculating..."
+                text=progress_text(
+                    height,
+                    0.0,
+                    "",
+                    ""
                 )
             )
 
-            last_percent = [-1.0]
-            last_update_time = [0.0]
+            updater_task = asyncio.create_task(
+                progress_updater(
+                    status,
+                    height,
+                    progress
+                )
+            )
 
-            def progress_callback(
-                percent,
-                speed,
-                eta
-            ):
-                import time
+            try:
 
-                now = time.monotonic()
+                output = await asyncio.to_thread(
+                    download_quality,
+                    url,
+                    height,
+                    DOWNLOAD_DIR,
+                    progress,
+                )
 
-                # Telegram ko bahut zyada edit requests na bhejein.
-                # Maximum roughly once per second.
-                if (
-                    percent < 100
-                    and percent - last_percent[0] < 1.0
-                    and now - last_update_time[0] < 1.0
-                ):
-                    return
+            finally:
 
-                last_percent[0] = percent
-                last_update_time[0] = now
+                progress["finished"] = True
 
-                asyncio.run_coroutine_threadsafe(
-                    update_download_progress(
-                        status,
+                try:
+                    await updater_task
+                except Exception:
+                    pass
+
+            # Final 100% message
+            try:
+                await status.edit_text(
+                    progress_text(
                         height,
-                        percent,
-                        speed,
-                        eta,
-                    ),
-                    loop,
+                        100.0,
+                        progress["speed"],
+                        "00:00"
+                    )
                 )
+            except Exception:
+                pass
 
-            output = await asyncio.to_thread(
-                download_quality,
-                url,
-                height,
-                DOWNLOAD_DIR,
-                progress_callback,
-            )
+            await asyncio.sleep(1)
 
             await status.edit_text(
                 f"☁️ {height}p downloaded.\n"
@@ -237,6 +277,7 @@ async def process_job(
 
             try:
                 output.unlink(missing_ok=True)
+
             except Exception:
                 pass
 
@@ -246,6 +287,7 @@ async def process_job(
             )
 
     except Exception as e:
+
         await application.bot.send_message(
             chat_id=chat_id,
             text=f"❌ Job failed:\n{e}"
@@ -256,9 +298,20 @@ async def process_job(
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app = (
+        Application
+        .builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
 
     app.add_handler(
         CallbackQueryHandler(
@@ -275,6 +328,7 @@ def main():
     )
 
     print("Bot started.")
+
     app.run_polling()
 
 
