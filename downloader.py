@@ -8,7 +8,7 @@ def download_quality(
     stream_url: str,
     height: int,
     download_dir: Path,
-    progress_callback=None,
+    progress=None,
 ) -> Path:
 
     download_dir.mkdir(
@@ -27,11 +27,17 @@ def download_quality(
         f"best[height<={height}]/best"
     )
 
-    def progress(d):
+    def progress_hook(d):
+
+        if progress is None:
+            return
 
         if d.get("status") == "downloading":
 
-            downloaded = d.get("downloaded_bytes", 0)
+            downloaded = d.get(
+                "downloaded_bytes",
+                0
+            )
 
             total = (
                 d.get("total_bytes")
@@ -39,42 +45,37 @@ def download_quality(
             )
 
             if total:
+                percent = (
+                    downloaded / total
+                ) * 100
+
                 percent = min(
                     100.0,
-                    (downloaded / total) * 100
+                    max(0.0, percent)
                 )
-            else:
-                percent = 0.0
 
-            speed = d.get("_speed_str", "").strip()
-            eta = d.get("_eta_str", "").strip()
+                progress["percent"] = percent
 
-            print(
-                f"{height}p | "
-                f"{percent:.1f}% | "
-                f"{speed} | "
-                f"ETA {eta}"
+            progress["speed"] = (
+                d.get("_speed_str", "")
+                .strip()
             )
 
-            if progress_callback:
-                progress_callback(
-                    percent,
-                    speed,
-                    eta
-                )
+            progress["eta"] = (
+                d.get("_eta_str", "")
+                .strip()
+            )
 
         elif d.get("status") == "finished":
 
-            if progress_callback:
-                progress_callback(
-                    100.0,
-                    "",
-                    "00:00"
-                )
+            progress["percent"] = 100.0
+            progress["eta"] = "00:00"
 
     opts = {
         "format": format_selector,
+
         "outtmpl": str(output),
+
         "merge_output_format": "mp4",
 
         "hls_use_mpegts": True,
@@ -87,15 +88,21 @@ def download_quality(
         },
 
         "quiet": True,
+
         "no_warnings": True,
 
+        "noprogress": True,
+
         "progress_hooks": [
-            progress
+            progress_hook
         ],
     }
 
     with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([stream_url])
+
+        ydl.download([
+            stream_url
+        ])
 
     if (
         not output.exists()
