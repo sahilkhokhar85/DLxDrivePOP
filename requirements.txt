@@ -1,0 +1,5 @@
+python-telegram-bot>=22,<23
+yt-dlp
+google-api-python-client
+google-auth
+google-auth-httplib2
