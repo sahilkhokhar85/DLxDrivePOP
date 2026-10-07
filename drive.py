@@ -1,11 +1,9 @@
 import base64
 import json
 import os
-from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -18,45 +16,44 @@ FOLDER_ID = os.environ["GOOGLE_DRIVE_FOLDER_ID"]
 
 
 def get_service():
-    token_file = Path("/tmp/google_token.json")
+    # OAuth client configuration
+    client_config_raw = base64.b64decode(
+        os.environ["GOOGLE_OAUTH_CLIENT_JSON_B64"]
+    ).decode("utf-8")
 
-    creds = None
+    client_config = json.loads(client_config_raw)
 
-    if token_file.exists():
-        creds = Credentials.from_authorized_user_file(
-            str(token_file),
-            SCOPES
-        )
+    installed = client_config["installed"]
 
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+    # OAuth token generated from your personal Google account
+    token_raw = base64.b64decode(
+        os.environ["GOOGLE_OAUTH_TOKEN_B64"]
+    ).decode("utf-8")
 
-    if not creds or not creds.valid:
-        encoded = os.environ["GOOGLE_OAUTH_CLIENT_JSON_B64"]
+    token_data = json.loads(token_raw)
 
-        raw = base64.b64decode(encoded).decode("utf-8")
-        client_config = json.loads(raw)
+    credentials = Credentials(
+        token=token_data.get("token"),
+        refresh_token=token_data.get("refresh_token"),
+        token_uri=installed["token_uri"],
+        client_id=installed["client_id"],
+        client_secret=installed["client_secret"],
+        scopes=SCOPES
+    )
 
-        flow = InstalledAppFlow.from_client_config(
-            client_config,
-            SCOPES
-        )
+    # Automatically refresh expired access token
+    if credentials.expired and credentials.refresh_token:
+        credentials.refresh(Request())
 
-        creds = flow.run_local_server(
-            port=8080,
-            access_type="offline",
-            prompt="consent"
-        )
-
-        token_file.write_text(
-            creds.to_json(),
-            encoding="utf-8"
+    if not credentials.valid:
+        raise RuntimeError(
+            "Google OAuth credentials are invalid or expired."
         )
 
     return build(
         "drive",
         "v3",
-        credentials=creds,
+        credentials=credentials,
         cache_discovery=False
     )
 
@@ -88,6 +85,7 @@ def upload_file(path):
 
     file_id = created["id"]
 
+    # Make the uploaded file accessible through the Drive link
     service.permissions().create(
         fileId=file_id,
         body={
