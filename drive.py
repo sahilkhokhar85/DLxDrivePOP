@@ -1,8 +1,10 @@
-import base64
 import json
 import os
+from pathlib import Path
 
-from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -15,27 +17,49 @@ FOLDER_ID = os.environ["GOOGLE_DRIVE_FOLDER_ID"]
 
 
 def get_service():
+    token_file = Path("/tmp/google_token.json")
 
-    encoded = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON_B64"]
+    creds = None
 
-    raw = base64.b64decode(encoded).decode("utf-8")
-    info = json.loads(raw)
+    if token_file.exists():
+        creds = Credentials.from_authorized_user_file(
+            str(token_file),
+            SCOPES
+        )
 
-    credentials = service_account.Credentials.from_service_account_info(
-        info,
-        scopes=SCOPES
-    )
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+
+    if not creds or not creds.valid:
+        client_config = json.loads(
+            os.environ["GOOGLE_OAUTH_CLIENT_JSON"]
+        )
+
+        flow = InstalledAppFlow.from_client_config(
+            client_config,
+            SCOPES
+        )
+
+        creds = flow.run_local_server(
+            port=8080,
+            access_type="offline",
+            prompt="consent"
+        )
+
+        token_file.write_text(
+            creds.to_json(),
+            encoding="utf-8"
+        )
 
     return build(
         "drive",
         "v3",
-        credentials=credentials,
+        credentials=creds,
         cache_discovery=False
     )
 
 
 def upload_file(path):
-
     service = get_service()
 
     metadata = {
@@ -55,8 +79,7 @@ def upload_file(path):
         .create(
             body=metadata,
             media_body=media,
-            fields="id,name,webViewLink",
-            supportsAllDrives=True
+            fields="id,name,webViewLink"
         )
         .execute()
     )
@@ -68,8 +91,7 @@ def upload_file(path):
         body={
             "type": "anyone",
             "role": "reader"
-        },
-        supportsAllDrives=True
+        }
     ).execute()
 
     return {
