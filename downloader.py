@@ -4,11 +4,16 @@ from pathlib import Path
 import yt_dlp
 
 
+class DownloadCancelled(Exception):
+    pass
+
+
 def download_quality(
     stream_url: str,
     height: int,
     download_dir: Path,
     progress=None,
+    cancel_event=None,
 ) -> Path:
 
     download_dir.mkdir(
@@ -28,6 +33,15 @@ def download_quality(
     )
 
     def progress_hook(d):
+
+        # Check cancellation before processing progress
+        if (
+            cancel_event is not None
+            and cancel_event.is_set()
+        ):
+            raise DownloadCancelled(
+                "Download cancelled by user."
+            )
 
         if progress is None:
             return
@@ -98,11 +112,41 @@ def download_quality(
         ],
     }
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    try:
 
-        ydl.download([
-            stream_url
-        ])
+        with yt_dlp.YoutubeDL(opts) as ydl:
+
+            ydl.download([
+                stream_url
+            ])
+
+    except DownloadCancelled:
+
+        # Remove incomplete output
+        try:
+            output.unlink(
+                missing_ok=True
+            )
+        except Exception:
+            pass
+
+        raise
+
+    # Check once more after yt-dlp finishes
+    if (
+        cancel_event is not None
+        and cancel_event.is_set()
+    ):
+        try:
+            output.unlink(
+                missing_ok=True
+            )
+        except Exception:
+            pass
+
+        raise DownloadCancelled(
+            "Download cancelled by user."
+        )
 
     if (
         not output.exists()
