@@ -7,7 +7,8 @@ import yt_dlp
 def download_quality(
     stream_url: str,
     height: int,
-    download_dir: Path
+    download_dir: Path,
+    progress_callback=None,
 ) -> Path:
 
     download_dir.mkdir(
@@ -27,15 +28,49 @@ def download_quality(
     )
 
     def progress(d):
+
         if d.get("status") == "downloading":
-            pct = d.get("_percent_str", "").strip()
+
+            downloaded = d.get("downloaded_bytes", 0)
+
+            total = (
+                d.get("total_bytes")
+                or d.get("total_bytes_estimate")
+            )
+
+            if total:
+                percent = min(
+                    100.0,
+                    (downloaded / total) * 100
+                )
+            else:
+                percent = 0.0
+
             speed = d.get("_speed_str", "").strip()
             eta = d.get("_eta_str", "").strip()
 
             print(
-                f"{height}p | {pct} | "
-                f"{speed} | ETA {eta}"
+                f"{height}p | "
+                f"{percent:.1f}% | "
+                f"{speed} | "
+                f"ETA {eta}"
             )
+
+            if progress_callback:
+                progress_callback(
+                    percent,
+                    speed,
+                    eta
+                )
+
+        elif d.get("status") == "finished":
+
+            if progress_callback:
+                progress_callback(
+                    100.0,
+                    "",
+                    "00:00"
+                )
 
     opts = {
         "format": format_selector,
