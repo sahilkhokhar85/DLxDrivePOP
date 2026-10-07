@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -31,9 +32,10 @@ def get_service():
         creds.refresh(Request())
 
     if not creds or not creds.valid:
-        client_config = json.loads(
-            os.environ["GOOGLE_OAUTH_CLIENT_JSON"]
-        )
+        encoded = os.environ["GOOGLE_OAUTH_CLIENT_JSON_B64"]
+
+        raw = base64.b64decode(encoded).decode("utf-8")
+        client_config = json.loads(raw)
 
         flow = InstalledAppFlow.from_client_config(
             client_config,
