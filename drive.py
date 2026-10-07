@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 
@@ -10,26 +11,19 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-FOLDER_ID = os.environ[
-    "GOOGLE_DRIVE_FOLDER_ID"
-]
+FOLDER_ID = os.environ["GOOGLE_DRIVE_FOLDER_ID"]
 
 
 def get_service():
 
-    raw = os.environ[
-        "GOOGLE_SERVICE_ACCOUNT_JSON"
-    ]
+    encoded = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON_B64"]
 
+    raw = base64.b64decode(encoded).decode("utf-8")
     info = json.loads(raw)
 
-    credentials = (
-        service_account
-        .Credentials
-        .from_service_account_info(
-            info,
-            scopes=SCOPES
-        )
+    credentials = service_account.Credentials.from_service_account_info(
+        info,
+        scopes=SCOPES
     )
 
     return build(
@@ -81,7 +75,5 @@ def upload_file(path):
     return {
         "id": file_id,
         "name": created["name"],
-        "url":
-            f"https://drive.google.com/file/d/"
-            f"{file_id}/view"
+        "url": f"https://drive.google.com/file/d/{file_id}/view"
     }
